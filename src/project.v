@@ -29,19 +29,24 @@ module tt_um_XmasTree_MaligayangPasko(
   // ------------------------------------------------------------------
   // VGA plumbing
   // ------------------------------------------------------------------
-  wire hsync;
-  wire vsync;
-  wire video_active;
-  wire [9:0] pix_x;
-  wire [9:0] pix_y;
+  // The design is pipelined (GF180 is slow, so the logic is split in stages):
+  //   stage 0: sync generator counters (hpos0 / vpos0)
+  //   stage 1: registered coordinates + tree geometry (rel_x, half-widths)
+  //   stage 2: scene logic -> registered colour outputs
+  // The picture is therefore 2 clocks late relative to the sync pulses, which are
+  // passed through untouched (standard VGA timing); the first 2 and last 2 pixel
+  // columns are blanked so nothing leaks into the porches.
+  wire        hs0, vs0, act0;
+  wire [9:0]  hpos0, vpos0;
 
-  reg  [5:0] rgb;             // {R[1:0], G[1:0], B[1:0]}
-  wire [1:0] R = video_active ? rgb[5:4] : 2'b00;
-  wire [1:0] G = video_active ? rgb[3:2] : 2'b00;
-  wire [1:0] B = video_active ? rgb[1:0] : 2'b00;
+  reg         video_active;                 // stage 1 (aligned with pix_x/pix_y)
+  reg  [9:0]  pix_x, pix_y;
+  reg  [1:0]  R, G, B;                      // stage 2 (output registers)
 
-  // TinyVGA PMOD output mapping
-  assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};
+  reg  [5:0] rgb;             // {R[1:0], G[1:0], B[1:0]} combinational scene colour
+
+  // TinyVGA PMOD output mapping (driven straight from flip-flops)
+  assign uo_out = {hs0, B[0], G[0], R[0], vs0, B[1], G[1], R[1]};
 
   // Unused outputs assigned to 0.
   assign uio_out = 0;
@@ -53,12 +58,27 @@ module tt_um_XmasTree_MaligayangPasko(
   hvsync_generator hvsync_gen(
     .clk(clk),
     .reset(~rst_n),
-    .hsync(hsync),
-    .vsync(vsync),
-    .display_on(video_active),
-    .hpos(pix_x),
-    .vpos(pix_y)
+    .hsync(hs0),
+    .vsync(vs0),
+    .display_on(act0),
+    .hpos(hpos0),
+    .vpos(vpos0)
   );
+
+  // Stage 1 registers
+  always @(posedge clk) begin
+    video_active <= act0;
+    pix_x        <= hpos0;
+    pix_y        <= vpos0;
+  end
+
+  // Stage 2 (output) registers
+  wire show = video_active && (pix_x < 10'd638);
+  always @(posedge clk) begin
+    R <= show ? rgb[5:4] : 2'b00;
+    G <= show ? rgb[3:2] : 2'b00;
+    B <= show ? rgb[1:0] : 2'b00;
+  end
 
   // ------------------------------------------------------------------
   // Frame counter (one tick per frame) drives all animation
@@ -70,8 +90,8 @@ module tt_um_XmasTree_MaligayangPasko(
       vsync_q <= 1'b0;
       frame   <= 9'd0;
     end else begin
-      vsync_q <= vsync;
-      if (vsync & ~vsync_q) frame <= frame + 9'd1;
+      vsync_q <= vs0;
+      if (vs0 & ~vsync_q) frame <= frame + 9'd1;
     end
   end
 
@@ -95,7 +115,8 @@ module tt_um_XmasTree_MaligayangPasko(
   // Tree geometry
   // ------------------------------------------------------------------
   localparam [9:0] CX = 10'd320;
-  wire [9:0] rel_x = (pix_x >= CX) ? (pix_x - CX) : (CX - pix_x);
+  reg  [9:0] rel_x;                       // |x - 320|, registered in stage 1
+  always @(posedge clk) rel_x <= (hpos0 >= CX) ? (hpos0 - CX) : (CX - hpos0);
 
   // Sawtooth along the width: makes the bottom of each tier scalloped,
   // like drooping branch tips.
@@ -106,12 +127,15 @@ module tt_um_XmasTree_MaligayangPasko(
   // Tier 2 (middle)  y 112..236
   // Tier 3 (bottom)  y 196..340
   // half-width = base + 0.625 * (y - top)
-  wire [9:0] dy1 = pix_y - 10'd52;
-  wire [9:0] dy2 = pix_y - 10'd112;
-  wire [9:0] dy3 = pix_y - 10'd196;
-  wire [9:0] hw1 = (dy1 >> 1) + (dy1 >> 3);
-  wire [9:0] hw2 = 10'd24 + (dy2 >> 1) + (dy2 >> 3);
-  wire [9:0] hw3 = 10'd52 + (dy3 >> 1) + (dy3 >> 3);
+  wire [9:0] dy1 = vpos0 - 10'd52;
+  wire [9:0] dy2 = vpos0 - 10'd112;
+  wire [9:0] dy3 = vpos0 - 10'd196;
+  reg  [7:0] hw1, hw2, hw3;               // registered in stage 1 (max 142)
+  always @(posedge clk) begin
+    hw1 <= (dy1 >> 1) + (dy1 >> 3);
+    hw2 <= 8'd24 + (dy2 >> 1) + (dy2 >> 3);
+    hw3 <= 8'd52 + (dy3 >> 1) + (dy3 >> 3);
+  end
 
   wire in_t1 = (pix_y >= 10'd52)  && (pix_y < 10'd150 + droop) && (rel_x < hw1);
   wire in_t2 = (pix_y >= 10'd112) && (pix_y < 10'd236 + droop) && (rel_x < hw2);
@@ -119,7 +143,7 @@ module tt_um_XmasTree_MaligayangPasko(
   wire in_tree = in_t1 | in_t2 | in_t3;
 
   // Upper tiers sit in front of lower ones
-  wire [9:0] hw_sel = in_t1 ? hw1 : (in_t2 ? hw2 : hw3);
+  wire [7:0] hw_sel = in_t1 ? hw1 : (in_t2 ? hw2 : hw3);
 
   // Dark band under every skirt, and a shadow cast onto the tier below it
   wire skirt  = in_t1 ? (pix_y + 10'd6 >= 10'd150 + droop) :
@@ -127,7 +151,7 @@ module tt_um_XmasTree_MaligayangPasko(
                         (pix_y + 10'd6 >= 10'd340 + droop);
   wire shadow = (~in_t1 & in_t2 & (pix_y < 10'd160 + droop)) |
                 (~in_t1 & ~in_t2 & in_t3 & (pix_y < 10'd246 + droop));
-  wire edge_dark = (rel_x + 10'd3 >= hw_sel);
+  wire edge_dark = (rel_x + 10'd3 >= {2'b0, hw_sel});
 
   // Chevron-shaped branch texture, parallel to the tree's flanks
   wire [9:0] tex = pix_y - {1'b0, rel_x[9:1]};
@@ -496,5 +520,4 @@ module tt_um_XmasTree_MaligayangPasko(
   end
 
 endmodule
-
 
