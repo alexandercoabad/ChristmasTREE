@@ -2,7 +2,11 @@
 
 # Christmas tree - Maligayang Pasko!
 
-- [Read the documentation for project](docs/info.md)
+
+
+https://github.com/user-attachments/assets/5ccb7ce0-362f-4c48-bbb0-46bcfe8f8fcc
+
+
 
 ## What is Tiny Tapeout?
 
