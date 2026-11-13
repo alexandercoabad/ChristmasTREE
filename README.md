@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/5ccb7ce0-362f-4c48-bbb0-46bcfe8f8fcc
 ## Layout
 <img width="1227" height="618" alt="Screenshot 2026-11-13 at 2 15 35 PM" src="https://github.com/user-attachments/assets/b9484671-1ce5-420b-88ad-fe8446d8b911" />
 
-3D
+
 <img width="871" height="471" alt="Screenshot 2026-11-13 at 2 15 17 PM" src="https://github.com/user-attachments/assets/395723f4-da3b-4191-8928-f311f8a11a22" />
 
 Link to 3D view: https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/ChristmasTREE/tinytapeout.oas&pdk=gf180mcuD
